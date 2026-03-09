@@ -203,6 +203,25 @@ class AbstractDiffusion:
         else:
             self.x_buffer.zero_()
 
+    def _tile_tensor_condition(self, v: Tensor, x_in: Tensor, x_tile: Tensor, bboxes, batch_id: int, get_bboxes_fn: Callable[[Tensor], List[List[BBox]]]) -> Tensor:
+        if v.ndim == 4:
+            bboxes_ = bboxes
+            if v.shape[-2:] != x_in.shape[-2:]:
+                bboxes_ = get_bboxes_fn(v)
+            v = torch.cat([v[bbox_.slicer] for bbox_ in bboxes_[batch_id]], dim=0)
+        if v.ndim > 0 and v.shape[0] != x_tile.shape[0]:
+            v = repeat_to_batch_size(v, x_tile.shape[0])
+        return v
+
+    def _tile_condition_value(self, v, x_in: Tensor, x_tile: Tensor, bboxes, batch_id: int, get_bboxes_fn: Callable[[Tensor], List[List[BBox]]]):
+        if isinstance(v, torch.Tensor):
+            return self._tile_tensor_condition(v, x_in, x_tile, bboxes, batch_id, get_bboxes_fn)
+        if isinstance(v, list):
+            return [self._tile_condition_value(item, x_in, x_tile, bboxes, batch_id, get_bboxes_fn) for item in v]
+        if isinstance(v, tuple):
+            return tuple(self._tile_condition_value(item, x_in, x_tile, bboxes, batch_id, get_bboxes_fn) for item in v)
+        return v
+
     @grid_bbox
     def init_grid_bbox(self, tile_w:int, tile_h:int, overlap:int, tile_bs:int):
         # if self._init_grid_bbox is not None: return
@@ -497,26 +516,20 @@ class MultiDiffusion(AbstractDiffusion):
                 x_tile = torch.cat([x_in[bbox.slicer] for bbox in bboxes], dim=0)   # [TB, C, TH, TW]
                 t_tile = repeat_to_batch_size(t_in, x_tile.shape[0])
                 c_tile = {}
+                def get_bboxes_for_tensor(v: Tensor):
+                    cf = x_in.shape[-1] * self.compression // v.shape[-1] # compression factor
+                    return self.get_grid_bbox(
+                        self.width // cf,
+                        self.height // cf,
+                        self.overlap // cf,
+                        self.tile_batch_size,
+                        v.shape[-1],
+                        v.shape[-2],
+                        x_in.device,
+                        self.get_tile_weights,
+                    )
                 for k, v in c_in.items():
-                    if isinstance(v, torch.Tensor):
-                        if len(v.shape) == len(x_tile.shape):
-                            bboxes_ = bboxes
-                            if v.shape[-2:] != x_in.shape[-2:]:
-                                cf = x_in.shape[-1] * self.compression // v.shape[-1] # compression factor
-                                bboxes_ = self.get_grid_bbox(
-                                    self.width // cf,
-                                    self.height // cf,
-                                    self.overlap // cf,
-                                    self.tile_batch_size,
-                                    v.shape[-1],
-                                    v.shape[-2],
-                                    x_in.device,
-                                    self.get_tile_weights,
-                                )
-                            v = torch.cat([v[bbox_.slicer] for bbox_ in bboxes_[batch_id]])
-                        if v.shape[0] != x_tile.shape[0]:
-                            v = repeat_to_batch_size(v, x_tile.shape[0])
-                    c_tile[k] = v
+                    c_tile[k] = self._tile_condition_value(v, x_in, x_tile, bboxes, batch_id, get_bboxes_for_tensor)
 
                 # controlnet tiling
                 # self.switch_controlnet_tensors(batch_id, N, len(bboxes))
@@ -648,29 +661,41 @@ class SpotDiffusion(AbstractDiffusion):
                 x_tile = torch.cat([x_in[bbox.slicer] for bbox in bboxes], dim=0)   # [TB, C, TH, TW]
                 t_tile = repeat_to_batch_size(t_in, x_tile.shape[0])
                 c_tile = {}
-                for k, v in c_in.items():
+                def get_bboxes_for_tensor(v: Tensor):
+                    cf = x_in.shape[-1] * self.compression // v.shape[-1] # compression factor
+                    return self.get_grid_bbox(
+                        self.width // cf,
+                        self.height // cf,
+                        self.overlap // cf,
+                        self.tile_batch_size,
+                        v.shape[-1],
+                        v.shape[-2],
+                        x_in.device,
+                        self.get_tile_weights,
+                    )
+                def tile_spot_value(v):
+                    if isinstance(v, torch.Tensor) and v.ndim == 4:
+                        bboxes_ = bboxes
+                        sh_h_new, sh_w_new = sh_h, sh_w
+                        if v.shape[-2:] != x_in.shape[-2:]:
+                            cf = x_in.shape[-1] * self.compression // v.shape[-1] # compression factor
+                            bboxes_ = get_bboxes_for_tensor(v)
+                            sh_h_new, sh_w_new = round(sh_h * self.compression / cf), round(sh_w * self.compression / cf)
+                        v = v.roll(shifts=(sh_h_new, sh_w_new), dims=(-2,-1))
+                        v = torch.cat([v[bbox_.slicer] for bbox_ in bboxes_[batch_id]], dim=0)
+                    if isinstance(v, torch.Tensor) and v.ndim > 0 and v.shape[0] != x_tile.shape[0]:
+                        v = repeat_to_batch_size(v, x_tile.shape[0])
+                    return v
+                def tile_spot_condition_value(v):
                     if isinstance(v, torch.Tensor):
-                        if len(v.shape) == len(x_tile.shape):
-                            bboxes_ = bboxes
-                            sh_h_new, sh_w_new = sh_h, sh_w
-                            if v.shape[-2:] != x_in.shape[-2:]:
-                                cf = x_in.shape[-1] * self.compression // v.shape[-1] # compression factor
-                                bboxes_ = self.get_grid_bbox(
-                                    self.width // cf,
-                                    self.height // cf,
-                                    self.overlap // cf,
-                                    self.tile_batch_size,
-                                    v.shape[-1],
-                                    v.shape[-2],
-                                    x_in.device,
-                                    self.get_tile_weights,
-                                )
-                                sh_h_new, sh_w_new = round(sh_h * self.compression / cf), round(sh_w * self.compression / cf)
-                            v = v.roll(shifts=(sh_h_new, sh_w_new), dims=(-2,-1))
-                            v = torch.cat([v[bbox_.slicer] for bbox_ in bboxes_[batch_id]])
-                        if v.shape[0] != x_tile.shape[0]:
-                            v = repeat_to_batch_size(v, x_tile.shape[0])
-                    c_tile[k] = v
+                        return tile_spot_value(v)
+                    if isinstance(v, list):
+                        return [tile_spot_condition_value(item) for item in v]
+                    if isinstance(v, tuple):
+                        return tuple(tile_spot_condition_value(item) for item in v)
+                    return v
+                for k, v in c_in.items():
+                    c_tile[k] = tile_spot_condition_value(v)
 
                 # controlnet tiling
                 # self.switch_controlnet_tensors(batch_id, N, len(bboxes))
@@ -771,26 +796,22 @@ class MixtureOfDiffusers(AbstractDiffusion):
                 x_tile = torch.cat(x_tile_list, dim=0)                     # differs each
                 t_tile = repeat_to_batch_size(t_in, x_tile.shape[0])   # just repeat
                 c_tile = {}
+                def get_bboxes_for_tensor(v: Tensor):
+                    cf = x_in.shape[-1] * self.compression // v.shape[-1] # compression factor
+                    tile_w = self.width // cf
+                    tile_h = self.height // cf
+                    return self.get_grid_bbox(
+                        tile_w,
+                        tile_h,
+                        self.overlap // cf,
+                        self.tile_batch_size,
+                        v.shape[-1],
+                        v.shape[-2],
+                        x_in.device,
+                        lambda: self.get_weight(tile_w, tile_h),
+                    )
                 for k, v in c_in.items():
-                    if isinstance(v, torch.Tensor):
-                        if len(v.shape) == len(x_tile.shape):
-                            bboxes_ = bboxes
-                            if v.shape[-2:] != x_in.shape[-2:]:
-                                cf = x_in.shape[-1] * self.compression // v.shape[-1] # compression factor
-                                bboxes_ = self.get_grid_bbox(
-                                    (tile_w := self.width // cf),
-                                    (tile_h := self.height // cf),
-                                    self.overlap // cf,
-                                    self.tile_batch_size,
-                                    v.shape[-1],
-                                    v.shape[-2],
-                                    x_in.device,
-                                    lambda: self.get_weight(tile_w, tile_h),
-                                )
-                            v = torch.cat([v[bbox_.slicer] for bbox_ in bboxes_[batch_id]])
-                        if v.shape[0] != x_tile.shape[0]:
-                            v = repeat_to_batch_size(v, x_tile.shape[0])
-                    c_tile[k] = v
+                    c_tile[k] = self._tile_condition_value(v, x_in, x_tile, bboxes, batch_id, get_bboxes_for_tensor)
                 
                 # controlnet
                 # self.switch_controlnet_tensors(batch_id, N, len(bboxes), is_denoise=True)
