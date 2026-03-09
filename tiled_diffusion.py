@@ -518,9 +518,11 @@ class MultiDiffusion(AbstractDiffusion):
                 c_tile = {}
                 def get_bboxes_for_tensor(v: Tensor):
                     cf = x_in.shape[-1] * self.compression // v.shape[-1] # compression factor
+                    tile_w = min(self.width // cf, v.shape[-1])
+                    tile_h = min(self.height // cf, v.shape[-2])
                     return self.get_grid_bbox(
-                        self.width // cf,
-                        self.height // cf,
+                        tile_w,
+                        tile_h,
                         self.overlap // cf,
                         self.tile_batch_size,
                         v.shape[-1],
@@ -663,9 +665,11 @@ class SpotDiffusion(AbstractDiffusion):
                 c_tile = {}
                 def get_bboxes_for_tensor(v: Tensor):
                     cf = x_in.shape[-1] * self.compression // v.shape[-1] # compression factor
+                    tile_w = min(self.width // cf, v.shape[-1])
+                    tile_h = min(self.height // cf, v.shape[-2])
                     return self.get_grid_bbox(
-                        self.width // cf,
-                        self.height // cf,
+                        tile_w,
+                        tile_h,
                         self.overlap // cf,
                         self.tile_batch_size,
                         v.shape[-1],
@@ -798,8 +802,8 @@ class MixtureOfDiffusers(AbstractDiffusion):
                 c_tile = {}
                 def get_bboxes_for_tensor(v: Tensor):
                     cf = x_in.shape[-1] * self.compression // v.shape[-1] # compression factor
-                    tile_w = self.width // cf
-                    tile_h = self.height // cf
+                    tile_w = min(self.width // cf, v.shape[-1])
+                    tile_h = min(self.height // cf, v.shape[-2])
                     return self.get_grid_bbox(
                         tile_w,
                         tile_h,
