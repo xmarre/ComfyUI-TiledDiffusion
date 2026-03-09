@@ -205,10 +205,10 @@ class AbstractDiffusion:
 
     def _tile_tensor_condition(self, v: Tensor, x_in: Tensor, x_tile: Tensor, bboxes, batch_id: int, get_bboxes_fn: Callable[[Tensor], List[List[BBox]]]) -> Tensor:
         if v.ndim == 4:
-            bboxes_ = bboxes
+            tile_bboxes = bboxes
             if v.shape[-2:] != x_in.shape[-2:]:
-                bboxes_ = get_bboxes_fn(v)
-            v = torch.cat([v[bbox_.slicer] for bbox_ in bboxes_[batch_id]], dim=0)
+                tile_bboxes = get_bboxes_fn(v)[batch_id]
+            v = torch.cat([v[bbox.slicer] for bbox in tile_bboxes], dim=0)
         if v.ndim > 0 and v.shape[0] != x_tile.shape[0]:
             v = repeat_to_batch_size(v, x_tile.shape[0])
         return v
@@ -675,14 +675,14 @@ class SpotDiffusion(AbstractDiffusion):
                     )
                 def tile_spot_value(v):
                     if isinstance(v, torch.Tensor) and v.ndim == 4:
-                        bboxes_ = bboxes
+                        tile_bboxes = bboxes
                         sh_h_new, sh_w_new = sh_h, sh_w
                         if v.shape[-2:] != x_in.shape[-2:]:
                             cf = x_in.shape[-1] * self.compression // v.shape[-1] # compression factor
-                            bboxes_ = get_bboxes_for_tensor(v)
+                            tile_bboxes = get_bboxes_for_tensor(v)[batch_id]
                             sh_h_new, sh_w_new = round(sh_h * self.compression / cf), round(sh_w * self.compression / cf)
                         v = v.roll(shifts=(sh_h_new, sh_w_new), dims=(-2,-1))
-                        v = torch.cat([v[bbox_.slicer] for bbox_ in bboxes_[batch_id]], dim=0)
+                        v = torch.cat([v[bbox.slicer] for bbox in tile_bboxes], dim=0)
                     if isinstance(v, torch.Tensor) and v.ndim > 0 and v.shape[0] != x_tile.shape[0]:
                         v = repeat_to_batch_size(v, x_tile.shape[0])
                     return v
