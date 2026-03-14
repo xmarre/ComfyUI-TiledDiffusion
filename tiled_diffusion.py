@@ -514,7 +514,9 @@ class MultiDiffusion(AbstractDiffusion):
 
                 # batching & compute tiles
                 x_tile = torch.cat([x_in[bbox.slicer] for bbox in bboxes], dim=0)   # [TB, C, TH, TW]
-                t_tile = repeat_to_batch_size(t_in, x_tile.shape[0])
+                t_tile = repeat_to_batch_size(t_in, x_tile.shape[0]).to(
+                    device=x_tile.device, non_blocking=True
+                )
                 c_tile = {}
                 def get_bboxes_for_tensor(v: Tensor):
                     cf = x_in.shape[-1] * self.compression // v.shape[-1] # compression factor
@@ -661,7 +663,9 @@ class SpotDiffusion(AbstractDiffusion):
 
                 # batching & compute tiles
                 x_tile = torch.cat([x_in[bbox.slicer] for bbox in bboxes], dim=0)   # [TB, C, TH, TW]
-                t_tile = repeat_to_batch_size(t_in, x_tile.shape[0])
+                t_tile = repeat_to_batch_size(t_in, x_tile.shape[0]).to(
+                    device=x_tile.device, non_blocking=True
+                )
                 c_tile = {}
                 def get_bboxes_for_tensor(v: Tensor):
                     cf = x_in.shape[-1] * self.compression // v.shape[-1] # compression factor
@@ -798,7 +802,9 @@ class MixtureOfDiffusers(AbstractDiffusion):
                     x_tile_list.append(x_in[bbox.slicer])
 
                 x_tile = torch.cat(x_tile_list, dim=0)                     # differs each
-                t_tile = repeat_to_batch_size(t_in, x_tile.shape[0])   # just repeat
+                t_tile = repeat_to_batch_size(t_in, x_tile.shape[0]).to(
+                    device=x_tile.device, non_blocking=True
+                )   # just repeat
                 c_tile = {}
                 def get_bboxes_for_tensor(v: Tensor):
                     cf = x_in.shape[-1] * self.compression // v.shape[-1] # compression factor
